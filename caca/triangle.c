@@ -88,7 +88,8 @@ int caca_fill_triangle(caca_canvas_t * cv, int x1, int y1, int x2, int y2,
                        int x3, int y3, uint32_t ch)
 {
     int x, y, xmin, xmax, ymin, ymax;
-    int xx1, xx2, xa, xb, sl21, sl31, sl32;
+    int64_t xx1, xx2, xa, xb, sl21, sl31, sl32;
+    int64_t sx1, sx2, sx3;
 
     /* Bubble-sort y1 <= y2 <= y3 */
     if (y1 > y2)
@@ -98,31 +99,34 @@ int caca_fill_triangle(caca_canvas_t * cv, int x1, int y1, int x2, int y2,
         return caca_fill_triangle(cv, x1, y1, x3, y3, x2, y2, ch);
 
     /* Compute slopes and promote precision */
-    sl21 = (y2 == y1) ? 0 : (x2 - x1) * 0x10000 / (y2 - y1);
-    sl31 = (y3 == y1) ? 0 : (x3 - x1) * 0x10000 / (y3 - y1);
-    sl32 = (y3 == y2) ? 0 : (x3 - x2) * 0x10000 / (y3 - y2);
+    sl21 = (y2 == y1) ? 0
+          : ((int64_t)x2 - x1) * 0x10000 / ((int64_t)y2 - y1);
+    sl31 = (y3 == y1) ? 0
+          : ((int64_t)x3 - x1) * 0x10000 / ((int64_t)y3 - y1);
+    sl32 = (y3 == y2) ? 0
+          : ((int64_t)x3 - x2) * 0x10000 / ((int64_t)y3 - y2);
 
-    x1 *= 0x10000;
-    x2 *= 0x10000;
-    x3 *= 0x10000;
+    sx1 = (int64_t)x1 * 0x10000;
+    sx2 = (int64_t)x2 * 0x10000;
+    sx3 = (int64_t)x3 * 0x10000;
 
     ymin = y1 < 0 ? 0 : y1;
-    ymax = y3 + 1 < cv->height ? y3 + 1 : cv->height;
+    ymax = (int64_t)y3 + 1 < cv->height ? y3 + 1 : cv->height;
 
     if (ymin < y2)
     {
-        xa = x1 + sl21 * (ymin - y1);
-        xb = x1 + sl31 * (ymin - y1);
+        xa = sx1 + sl21 * ((int64_t)ymin - y1);
+        xb = sx1 + sl31 * ((int64_t)ymin - y1);
     }
     else if (ymin == y2)
     {
-        xa = x2;
-        xb = (y1 == y3) ? x3 : x1 + sl31 * (ymin - y1);
+        xa = sx2;
+        xb = (y1 == y3) ? sx3 : sx1 + sl31 * ((int64_t)ymin - y1);
     }
     else                        /* (ymin > y2) */
     {
-        xa = x3 + sl32 * (ymin - y3);
-        xb = x3 + sl31 * (ymin - y3);
+        xa = sx3 + sl32 * ((int64_t)ymin - y3);
+        xb = sx3 + sl31 * ((int64_t)ymin - y3);
     }
 
     /* Rasterize our triangle */
@@ -140,8 +144,9 @@ int caca_fill_triangle(caca_canvas_t * cv, int x1, int y1, int x2, int y2,
             xx2 = (xa + 0x801) / 0x10000;
         }
 
-        xmin = xx1 < 0 ? 0 : xx1;
-        xmax = xx2 + 1 < cv->width ? xx2 + 1 : cv->width;
+        xmin = xx1 < 0 ? 0 : xx1 > cv->width ? cv->width : (int)xx1;
+        xmax = xx2 + 1 < 0 ? 0
+             : xx2 + 1 > cv->width ? cv->width : (int)(xx2 + 1);
 
         for (x = xmin; x < xmax; x++)
             caca_put_char(cv, x, y, ch);
@@ -177,7 +182,10 @@ static int caca_fill_triangle_textured_l(caca_canvas_t * cv,
        (very) non-corrected triangle mapper Accepts arbitrary texture sizes
        Coordinates clamped to [0.0 - 1.0] (no repeat) */
     if (!cv || !tex)
+    {
+        seterrno(EINVAL);
         return -1;
+    }
 
     /* Bubble-sort y1 <= y2 <= y3 */
     if (y1 > y2)
@@ -370,4 +378,3 @@ int caca_fill_triangle_textured(caca_canvas_t * cv,
                                          uv[0], uv[1],
                                          uv[2], uv[3], uv[4], uv[5]);
 }
-

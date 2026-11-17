@@ -146,15 +146,23 @@ int caca_create_frame(caca_canvas_t *cv, int id)
 {
     int size = cv->width * cv->height;
     int f;
+    struct caca_frame *frames;
 
     if(id < 0)
         id = 0;
     else if(id > cv->framecount)
         id = cv->framecount;
 
+    frames = realloc(cv->frames,
+                     sizeof(struct caca_frame) * (cv->framecount + 1));
+    if(!frames)
+    {
+        seterrno(ENOMEM);
+        return -1;
+    }
+
+    cv->frames = frames;
     cv->framecount++;
-    cv->frames = realloc(cv->frames,
-                         sizeof(struct caca_frame) * cv->framecount);
 
     for(f = cv->framecount - 1; f > id; f--)
         cv->frames[f] = cv->frames[f - 1];
@@ -165,9 +173,24 @@ int caca_create_frame(caca_canvas_t *cv, int id)
     cv->frames[id].width = cv->width;
     cv->frames[id].height = cv->height;
     cv->frames[id].chars = malloc(size * sizeof(uint32_t));
-    memcpy(cv->frames[id].chars, cv->chars, size * sizeof(uint32_t));
     cv->frames[id].attrs = malloc(size * sizeof(uint32_t));
-    memcpy(cv->frames[id].attrs, cv->attrs, size * sizeof(uint32_t));
+    if(size && (!cv->frames[id].chars || !cv->frames[id].attrs))
+    {
+        free(cv->frames[id].chars);
+        free(cv->frames[id].attrs);
+        cv->frames[id].chars = NULL;
+        cv->frames[id].attrs = NULL;
+        cv->frames[id].name = NULL;
+        caca_free_frame(cv, id);
+        seterrno(ENOMEM);
+        return -1;
+    }
+
+    if(size)
+    {
+        memcpy(cv->frames[id].chars, cv->chars, size * sizeof(uint32_t));
+        memcpy(cv->frames[id].attrs, cv->attrs, size * sizeof(uint32_t));
+    }
     cv->frames[id].curattr = cv->curattr;
 
     cv->frames[id].x = cv->frames[cv->frame].x;
@@ -176,6 +199,16 @@ int caca_create_frame(caca_canvas_t *cv, int id)
     cv->frames[id].handley = cv->frames[cv->frame].handley;
 
     cv->frames[id].name = strdup("frame#--------");
+    if(!cv->frames[id].name)
+    {
+        free(cv->frames[id].chars);
+        free(cv->frames[id].attrs);
+        cv->frames[id].chars = NULL;
+        cv->frames[id].attrs = NULL;
+        caca_free_frame(cv, id);
+        seterrno(ENOMEM);
+        return -1;
+    }
     sprintf(cv->frames[id].name + 6, "%.08x", ++cv->autoinc);
 
     return 0;
@@ -205,6 +238,7 @@ int caca_create_frame(caca_canvas_t *cv, int id)
 int caca_free_frame(caca_canvas_t *cv, int id)
 {
     int f;
+    struct caca_frame *frames;
 
     if(id < 0 || id >= cv->framecount)
     {
@@ -226,8 +260,10 @@ int caca_free_frame(caca_canvas_t *cv, int id)
         cv->frames[f - 1] = cv->frames[f];
 
     cv->framecount--;
-    cv->frames = realloc(cv->frames,
-                         sizeof(struct caca_frame) * cv->framecount);
+    frames = realloc(cv->frames,
+                     sizeof(struct caca_frame) * cv->framecount);
+    if(frames)
+        cv->frames = frames;
 
     if(cv->frame > id)
         cv->frame--;
@@ -264,4 +300,3 @@ void _caca_load_frame_info(caca_canvas_t *cv)
 
     cv->curattr = cv->frames[cv->frame].curattr;
 }
-

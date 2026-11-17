@@ -22,6 +22,7 @@
 #   include <string.h>
 #   include <stdlib.h>
 #   include <stdarg.h>
+#   include <limits.h>
 #   if defined(HAVE_UNISTD_H)
 #       include <unistd.h>
 #   endif
@@ -273,9 +274,10 @@ int caca_put_str(caca_canvas_t *cv, int x, int y, char const *s)
     while (*s)
     {
         uint32_t ch = caca_utf8_to_utf32(s, &rd);
+        int64_t pos = (int64_t)x + len;
 
-        if (x + len >= -1 && x + len < (int)cv->width)
-            caca_put_char(cv, x + len, y, ch);
+        if (pos >= -1 && pos < (int)cv->width)
+            caca_put_char(cv, (int)pos, y, ch);
 
         len += caca_utf32_is_fullwidth(ch) ? 2 : 1;
         s += rd ? rd : 1;
@@ -327,7 +329,9 @@ int caca_printf(caca_canvas_t *cv, int x, int y, char const *format, ...)
  *  not the number of characters printed, because fullwidth characters
  *  account for two cells.
  *
- *  This function never fails.
+ *  If an error occurs, -1 is returned and \b errno is set accordingly:
+ *  - \c EOVERFLOW The output buffer size would overflow.
+ *  - \c ENOMEM Not enough memory for the temporary buffer.
  *
  *  \param cv A handle to the libcaca canvas.
  *  \param x X coordinate.
@@ -342,11 +346,24 @@ int caca_vprintf(caca_canvas_t *cv, int x, int y, char const *format,
     char tmp[BUFSIZ];
     char *buf = tmp;
     int bufsize = BUFSIZ, ret;
+    int64_t needed;
 
-    if(cv->width - x + 1 > BUFSIZ)
+    needed = (int64_t)cv->width - x + 1;
+    if(needed > INT_MAX)
     {
-        bufsize = cv->width - x + 1;
-        buf = malloc(bufsize);
+        seterrno(EOVERFLOW);
+        return -1;
+    }
+
+    if(needed > BUFSIZ)
+    {
+        bufsize = (int)needed;
+        buf = malloc((size_t)bufsize);
+        if(!buf)
+        {
+            seterrno(ENOMEM);
+            return -1;
+        }
     }
 
 #if defined(HAVE_VSNPRINTF_S)
@@ -459,7 +476,14 @@ int caca_get_canvas_handle_y(caca_canvas_t const *cv)
 int caca_blit(caca_canvas_t *dst, int x, int y,
               caca_canvas_t const *src, caca_canvas_t const *mask)
 {
-    int i, j, starti, startj, endi, endj, stride, bleed_left, bleed_right;
+    int i, j, starti, startj, endi, endj, stride;
+    int64_t sx, sy, si, sj, ei, ej;
+
+    if(!dst || !src)
+    {
+        seterrno(EINVAL);
+        return -1;
+    }
 
     if(mask && (src->width != mask->width || src->height != mask->height))
     {
@@ -467,38 +491,40 @@ int caca_blit(caca_canvas_t *dst, int x, int y,
         return -1;
     }
 
-    x -= src->frames[src->frame].handlex;
-    y -= src->frames[src->frame].handley;
+    sx = (int64_t)x - src->frames[src->frame].handlex;
+    sy = (int64_t)y - src->frames[src->frame].handley;
 
-    starti = x < 0 ? -x : 0;
-    startj = y < 0 ? -y : 0;
-    endi = (x + src->width >= dst->width) ? dst->width - x : src->width;
-    endj = (y + src->height >= dst->height) ? dst->height - y : src->height;
-    stride = endi - starti;
+    si = sx < 0 ? -sx : 0;
+    sj = sy < 0 ? -sy : 0;
+    ei = sx + src->width >= dst->width ? dst->width - sx : src->width;
+    ej = sy + src->height >= dst->height ? dst->height - sy : src->height;
 
-    if(starti > src->width || startj > src->height
-        || starti >= endi || startj >= endj)
+    if(si > src->width || sj > src->height || si >= ei || sj >= ej)
         return 0;
 
-    bleed_left = bleed_right = 0;
+    starti = (int)si;
+    startj = (int)sj;
+    endi = (int)ei;
+    endj = (int)ej;
+    stride = endi - starti;
 
     for(j = startj; j < endj; j++)
     {
-        int dstix = (j + y) * dst->width + starti + x;
+        int dstx = (int)(sx + starti);
+        int dsty = (int)(sy + j);
+        int dstix = dsty * dst->width + dstx;
         int srcix = j * src->width + starti;
 
         /* FIXME: we are ignoring the mask here */
-        if((starti + x) && dst->chars[dstix] == CACA_MAGIC_FULLWIDTH)
+        if(dstx && dst->chars[dstix] == CACA_MAGIC_FULLWIDTH)
         {
             dst->chars[dstix - 1] = ' ';
-            bleed_left = 1;
         }
 
-        if(endi + x < dst->width
-                && dst->chars[dstix + stride] == CACA_MAGIC_FULLWIDTH)
+        if(dstx + stride < dst->width
+            && dst->chars[dstix + stride] == CACA_MAGIC_FULLWIDTH)
         {
             dst->chars[dstix + stride] = ' ';
-            bleed_right = 1;
         }
 
         if(mask)
@@ -514,20 +540,24 @@ int caca_blit(caca_canvas_t *dst, int x, int y,
                     dst->chars[dstix + i] = src->chars[srcix + i];
                     dst->attrs[dstix + i] = src->attrs[srcix + i];
                     if(!dst->dirty_disabled)
-                        caca_add_dirty_rect(dst, x + starti + i, y + j, 1, 1);
+                        caca_add_dirty_rect(dst, dstx + i, dsty, 1, 1);
                 }
             }
         }
         else
         {
-            if(memcmp(dst->chars + dstix, src->chars + srcix, stride * 4) ||
-               memcmp(dst->attrs + dstix, src->attrs + srcix, stride * 4))
+            if(memcmp(dst->chars + dstix, src->chars + srcix,
+                      (size_t)stride * sizeof(uint32_t)) ||
+               memcmp(dst->attrs + dstix, src->attrs + srcix,
+                      (size_t)stride * sizeof(uint32_t)))
             {
                 /* FIXME be more precise ? */
-                memcpy(dst->chars + dstix, src->chars + srcix, stride * 4);
-                memcpy(dst->attrs + dstix, src->attrs + srcix, stride * 4);
+                memcpy(dst->chars + dstix, src->chars + srcix,
+                       (size_t)stride * sizeof(uint32_t));
+                memcpy(dst->attrs + dstix, src->attrs + srcix,
+                       (size_t)stride * sizeof(uint32_t));
                 if(!dst->dirty_disabled)
-                    caca_add_dirty_rect(dst, x + starti, y + j, stride, 1);
+                    caca_add_dirty_rect(dst, dstx, dsty, stride, 1);
             }
         }
 
@@ -580,18 +610,29 @@ int caca_set_canvas_boundaries(caca_canvas_t *cv, int x, int y, int w, int h)
     }
 
     new = caca_create_canvas(w, h);
+    if(!new)
+        return -1;
 
     framecount = caca_get_frame_count(cv);
     saved_f = cv->frame;
 
+    for(f = 1; f < framecount; f++)
+    {
+        if(caca_create_frame(new, framecount) < 0)
+        {
+            int saved_errno = geterrno();
+            caca_free_canvas(new);
+            seterrno(saved_errno);
+            return -1;
+        }
+    }
+
     for(f = 0; f < framecount; f++)
     {
-        if(f)
-            caca_create_frame(new, framecount);
-
         caca_set_frame(cv, f);
         caca_set_frame(new, f);
-        caca_blit(new, -x, -y, cv, NULL);
+        if(x != INT_MIN && y != INT_MIN)
+            caca_blit(new, -x, -y, cv, NULL);
         free(cv->frames[f].chars);
         free(cv->frames[f].attrs);
     }
@@ -629,4 +670,3 @@ int vsnprintf(char *s, size_t n, const char *fmt, va_list ap)
 }
 #   endif
 #endif
-

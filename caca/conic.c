@@ -19,16 +19,26 @@
 
 #if !defined(__KERNEL__)
 #   include <stdlib.h>
+#   include <limits.h>
 #endif
 
 #include "caca.h"
 #include "caca_internals.h"
 
-static void ellipsepoints(caca_canvas_t *, int, int, int, int, uint32_t, int);
+#define CACA_MAX_RADIUS 46340
+
+static void ellipsepoints(caca_canvas_t *, int, int, int64_t, int64_t,
+                          uint32_t, int);
+static int check_radii(int, int);
+static int clamp_int64(int64_t);
+static void ellipse_line(caca_canvas_t *, int, int, int64_t, int64_t,
+                         uint32_t);
 
 /** \brief Draw a circle on the canvas using the given character.
  *
- *  This function never fails.
+ *  If an error occurs, -1 is returned and \b errno is set accordingly:
+ *  - \c EINVAL The radius is negative.
+ *  - \c EOVERFLOW The radius is too large to rasterise safely.
  *
  *  \param cv The handle to the libcaca canvas.
  *  \param x Center X coordinate.
@@ -40,6 +50,9 @@ static void ellipsepoints(caca_canvas_t *, int, int, int, int, uint32_t, int);
 int caca_draw_circle(caca_canvas_t *cv, int x, int y, int r, uint32_t ch)
 {
     int test, dx, dy;
+
+    if(check_radii(r, r) < 0)
+        return -1;
 
     /* Optimized Bresenham. Kick ass. */
     for(test = 0, dx = 0, dy = r ; dx <= dy ; dx++)
@@ -55,7 +68,9 @@ int caca_draw_circle(caca_canvas_t *cv, int x, int y, int r, uint32_t ch)
 
 /** \brief Fill an ellipse on the canvas using the given character.
  *
- *  This function never fails.
+ *  If an error occurs, -1 is returned and \b errno is set accordingly:
+ *  - \c EINVAL A radius is negative.
+ *  - \c EOVERFLOW A radius is too large to rasterise safely.
  *
  *  \param cv The handle to the libcaca canvas.
  *  \param xo Center X coordinate.
@@ -68,46 +83,52 @@ int caca_draw_circle(caca_canvas_t *cv, int x, int y, int r, uint32_t ch)
 int caca_fill_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b,
                        uint32_t ch)
 {
-    int d2;
-    int x = 0;
-    int y = b;
-    int d1 = b*b - (a*a*b) + (a*a/4);
+    int64_t d1, d2, aa, bb, x = 0, y;
 
-    while(a*a*y - a*a/2 > b*b*(x+1))
+    if(check_radii(a, b) < 0)
+        return -1;
+
+    aa = (int64_t)a * a;
+    bb = (int64_t)b * b;
+    y = b;
+    d1 = bb - aa * b + aa / 4;
+
+    while(aa * y - aa / 2 > bb * (x + 1))
     {
         if(d1 < 0)
         {
-            d1 += b*b*(2*x+1); /* XXX: "Computer Graphics" has + 3 here. */
+            d1 += bb * (2 * x + 1); /* XXX: "Computer Graphics" has + 3 here. */
         }
         else
         {
-            d1 += b*b*(2*x*1) + a*a*(-2*y+2);
-            caca_draw_line(cv, xo - x, yo - y, xo + x, yo - y, ch);
-            caca_draw_line(cv, xo - x, yo + y, xo + x, yo + y, ch);
+            d1 += bb * (2 * x * 1) + aa * (-2 * y + 2);
+            ellipse_line(cv, xo, yo, x, y, ch);
+            ellipse_line(cv, xo, yo, x, -y, ch);
             y--;
         }
         x++;
     }
 
-    caca_draw_line(cv, xo - x, yo - y, xo + x, yo - y, ch);
-    caca_draw_line(cv, xo - x, yo + y, xo + x, yo + y, ch);
+    ellipse_line(cv, xo, yo, x, y, ch);
+    ellipse_line(cv, xo, yo, x, -y, ch);
 
-    d2 = b*b*(x+0.5)*(x+0.5) + a*a*(y-1)*(y-1) - a*a*b*b;
+    d2 = (int64_t)(bb * (x + 0.5) * (x + 0.5)
+                   + aa * (y - 1) * (y - 1) - aa * bb);
     while(y > 0)
     {
         if(d2 < 0)
         {
-            d2 += b*b*(2*x+2) + a*a*(-2*y+3);
+            d2 += bb * (2 * x + 2) + aa * (-2 * y + 3);
             x++;
         }
         else
         {
-            d2 += a*a*(-2*y+3);
+            d2 += aa * (-2 * y + 3);
         }
 
         y--;
-        caca_draw_line(cv, xo - x, yo - y, xo + x, yo - y, ch);
-        caca_draw_line(cv, xo - x, yo + y, xo + x, yo + y, ch);
+        ellipse_line(cv, xo, yo, x, y, ch);
+        ellipse_line(cv, xo, yo, x, -y, ch);
     }
 
     return 0;
@@ -115,7 +136,9 @@ int caca_fill_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b,
 
 /** \brief Draw an ellipse on the canvas using the given character.
  *
- *  This function never fails.
+ *  If an error occurs, -1 is returned and \b errno is set accordingly:
+ *  - \c EINVAL A radius is negative.
+ *  - \c EOVERFLOW A radius is too large to rasterise safely.
  *
  *  \param cv The handle to the libcaca canvas.
  *  \param xo Center X coordinate.
@@ -128,39 +151,45 @@ int caca_fill_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b,
 int caca_draw_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b,
                        uint32_t ch)
 {
-    int d2;
-    int x = 0;
-    int y = b;
-    int d1 = b*b - (a*a*b) + (a*a/4);
+    int64_t d1, d2, aa, bb, x = 0, y;
+
+    if(check_radii(a, b) < 0)
+        return -1;
+
+    aa = (int64_t)a * a;
+    bb = (int64_t)b * b;
+    y = b;
+    d1 = bb - aa * b + aa / 4;
 
     ellipsepoints(cv, xo, yo, x, y, ch, 0);
 
-    while(a*a*y - a*a/2 > b*b*(x+1))
+    while(aa * y - aa / 2 > bb * (x + 1))
     {
         if(d1 < 0)
         {
-            d1 += b*b*(2*x+1); /* XXX: "Computer Graphics" has + 3 here. */
+            d1 += bb * (2 * x + 1); /* XXX: "Computer Graphics" has + 3 here. */
         }
         else
         {
-            d1 += b*b*(2*x*1) + a*a*(-2*y+2);
+            d1 += bb * (2 * x * 1) + aa * (-2 * y + 2);
             y--;
         }
         x++;
         ellipsepoints(cv, xo, yo, x, y, ch, 0);
     }
 
-    d2 = b*b*(x+0.5)*(x+0.5) + a*a*(y-1)*(y-1) - a*a*b*b;
+    d2 = (int64_t)(bb * (x + 0.5) * (x + 0.5)
+                   + aa * (y - 1) * (y - 1) - aa * bb);
     while(y > 0)
     {
         if(d2 < 0)
         {
-            d2 += b*b*(2*x+2) + a*a*(-2*y+3);
+            d2 += bb * (2 * x + 2) + aa * (-2 * y + 3);
             x++;
         }
         else
         {
-            d2 += a*a*(-2*y+3);
+            d2 += aa * (-2 * y + 3);
         }
 
         y--;
@@ -172,7 +201,9 @@ int caca_draw_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b,
 
 /** \brief Draw a thin ellipse on the canvas.
  *
- *  This function never fails.
+ *  If an error occurs, -1 is returned and \b errno is set accordingly:
+ *  - \c EINVAL A radius is negative.
+ *  - \c EOVERFLOW A radius is too large to rasterise safely.
  *
  *  \param cv The handle to the libcaca canvas.
  *  \param xo Center X coordinate.
@@ -184,23 +215,28 @@ int caca_draw_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b,
 int caca_draw_thin_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b)
 {
     /* FIXME: this is not correct */
-    int d2;
-    int x = 0;
-    int y = b;
-    int d1 = b*b - (a*a*b) + (a*a/4);
+    int64_t d1, d2, aa, bb, x = 0, y;
+
+    if(check_radii(a, b) < 0)
+        return -1;
+
+    aa = (int64_t)a * a;
+    bb = (int64_t)b * b;
+    y = b;
+    d1 = bb - aa * b + aa / 4;
 
     ellipsepoints(cv, xo, yo, x, y, '-', 1);
 
-    while(a*a*y - a*a/2 > b*b*(x+1))
+    while(aa * y - aa / 2 > bb * (x + 1))
     {
         if(d1 < 0)
         {
-            d1 += b*b*(2*x+1); /* XXX: "Computer Graphics" has + 3 here. */
+            d1 += bb * (2 * x + 1); /* XXX: "Computer Graphics" has + 3 here. */
             ellipsepoints(cv, xo, yo, x + 1, y, '0', 1);
         }
         else
         {
-            d1 += b*b*(2*x*1) + a*a*(-2*y+2);
+            d1 += bb * (2 * x * 1) + aa * (-2 * y + 2);
             y--;
             ellipsepoints(cv, xo, yo, x + 1, y, '1', 1);
         }
@@ -209,18 +245,19 @@ int caca_draw_thin_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b)
 
     }
 
-    d2 = b*b*(x+0.5)*(x+0.5) + a*a*(y-1)*(y-1) - a*a*b*b;
+    d2 = (int64_t)(bb * (x + 0.5) * (x + 0.5)
+                   + aa * (y - 1) * (y - 1) - aa * bb);
     while(y > 0)
     {
         if(d2 < 0)
         {
-            d2 += b*b*(2*x+2) + a*a*(-2*y+3);
+            d2 += bb * (2 * x + 2) + aa * (-2 * y + 3);
             x++;
             ellipsepoints(cv, xo, yo, x , y - 1, '2', 1);
         }
         else
         {
-            d2 += a*a*(-2*y+3);
+            d2 += aa * (-2 * y + 3);
             ellipsepoints(cv, xo, yo, x , y - 1, '3', 1);
         }
 
@@ -232,18 +269,54 @@ int caca_draw_thin_ellipse(caca_canvas_t *cv, int xo, int yo, int a, int b)
     return 0;
 }
 
-static void ellipsepoints(caca_canvas_t *cv, int xo, int yo, int x, int y,
+static int check_radii(int x, int y)
+{
+    if(x < 0 || y < 0)
+    {
+        seterrno(EINVAL);
+        return -1;
+    }
+
+    if(x > CACA_MAX_RADIUS || y > CACA_MAX_RADIUS)
+    {
+        seterrno(EOVERFLOW);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int clamp_int64(int64_t value)
+{
+    if(value < INT_MIN)
+        return INT_MIN;
+    if(value > INT_MAX)
+        return INT_MAX;
+    return (int)value;
+}
+
+static void ellipse_line(caca_canvas_t *cv, int xo, int yo,
+                         int64_t x, int64_t y, uint32_t ch)
+{
+    caca_draw_line(cv, clamp_int64((int64_t)xo - x),
+                   clamp_int64((int64_t)yo + y),
+                   clamp_int64((int64_t)xo + x),
+                   clamp_int64((int64_t)yo + y), ch);
+}
+
+static void ellipsepoints(caca_canvas_t *cv, int xo, int yo, int64_t x,
+                          int64_t y,
                           uint32_t ch, int thin)
 {
     uint8_t b = 0;
 
-    if(xo + x >= 0 && xo + x < (int)cv->width)
+    if((int64_t)xo + x >= 0 && (int64_t)xo + x < (int)cv->width)
         b |= 0x1;
-    if(xo - x >= 0 && xo - x < (int)cv->width)
+    if((int64_t)xo - x >= 0 && (int64_t)xo - x < (int)cv->width)
         b |= 0x2;
-    if(yo + y >= 0 && yo + y < (int)cv->height)
+    if((int64_t)yo + y >= 0 && (int64_t)yo + y < (int)cv->height)
         b |= 0x4;
-    if(yo - y >= 0 && yo - y < (int)cv->height)
+    if((int64_t)yo - y >= 0 && (int64_t)yo - y < (int)cv->height)
         b |= 0x8;
 
     if((b & (0x1|0x4)) == (0x1|0x4)) {
@@ -338,4 +411,3 @@ static void ellipsepoints(caca_canvas_t *cv, int xo, int yo, int x, int y,
         caca_put_char(cv, xo - x, yo - y, c);
     }
 }
-

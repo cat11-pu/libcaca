@@ -18,6 +18,7 @@
 
 #if !defined(__KERNEL__)
 #   include <stdlib.h>
+#   include <limits.h>
 #endif
 
 #include "caca.h"
@@ -25,6 +26,15 @@
 
 static int draw_box(caca_canvas_t *cv, int x, int y, int w, int h,
                     uint32_t const *chars);
+
+static int64_t clamp_int64(int64_t value)
+{
+    if(value < INT_MIN)
+        return INT_MIN;
+    if(value > INT_MAX)
+        return INT_MAX;
+    return value;
+}
 
 /** \brief Draw a box on the canvas using the given character.
  *
@@ -40,8 +50,8 @@ static int draw_box(caca_canvas_t *cv, int x, int y, int w, int h,
  */
 int caca_draw_box(caca_canvas_t *cv, int x, int y, int w, int h, uint32_t ch)
 {
-    int x2 = x + w - 1;
-    int y2 = y + h - 1;
+    int x2 = (int)clamp_int64((int64_t)x + w - 1);
+    int y2 = (int)clamp_int64((int64_t)y + h - 1);
 
     caca_draw_line(cv,  x,  y,  x, y2, ch);
     caca_draw_line(cv,  x, y2, x2, y2, ch);
@@ -111,29 +121,31 @@ int caca_fill_box(caca_canvas_t *cv, int x, int y, int w, int h,
 {
     int i, j, xmax, ymax;
 
-    int x2 = x + w - 1;
-    int y2 = y + h - 1;
+    int64_t x1 = x;
+    int64_t y1 = y;
+    int64_t x2 = (int64_t)x + w - 1;
+    int64_t y2 = (int64_t)y + h - 1;
 
-    if(x > x2)
+    if(x1 > x2)
     {
-        int tmp = x;
-        x = x2; x2 = tmp;
+        int64_t tmp = x1;
+        x1 = x2; x2 = tmp;
     }
 
-    if(y > y2)
+    if(y1 > y2)
     {
-        int tmp = y;
-        y = y2; y2 = tmp;
+        int64_t tmp = y1;
+        y1 = y2; y2 = tmp;
     }
 
     xmax = cv->width - 1;
     ymax = cv->height - 1;
 
-    if(x2 < 0 || y2 < 0 || x > xmax || y > ymax)
+    if(x2 < 0 || y2 < 0 || x1 > xmax || y1 > ymax)
         return 0;
 
-    if(x < 0) x = 0;
-    if(y < 0) y = 0;
+    if(x1 < 0) x1 = 0;
+    if(y1 < 0) y1 = 0;
     if(x2 > xmax) x2 = xmax;
     if(y2 > ymax) y2 = ymax;
 
@@ -144,8 +156,8 @@ int caca_fill_box(caca_canvas_t *cv, int x, int y, int w, int h,
     cv->dirty_disabled++;
 #endif
 
-    for(j = y; j <= y2; j++)
-        for(i = x; i <= x2; i++)
+    for(j = (int)y1; j <= (int)y2; j++)
+        for(i = (int)x1; i <= (int)x2; i++)
             caca_put_char(cv, i, j, ch);
 
 #if 0
@@ -167,50 +179,51 @@ static int draw_box(caca_canvas_t *cv, int x, int y, int w, int h,
 {
     int i, j, xmax, ymax;
 
-    int x2 = x + w - 1;
-    int y2 = y + h - 1;
+    int64_t x1 = x;
+    int64_t y1 = y;
+    int64_t x2 = (int64_t)x + w - 1;
+    int64_t y2 = (int64_t)y + h - 1;
 
-    if(x > x2)
+    if(x1 > x2)
     {
-        int tmp = x;
-        x = x2; x2 = tmp;
+        int64_t tmp = x1;
+        x1 = x2; x2 = tmp;
     }
 
-    if(y > y2)
+    if(y1 > y2)
     {
-        int tmp = y;
-        y = y2; y2 = tmp;
+        int64_t tmp = y1;
+        y1 = y2; y2 = tmp;
     }
 
     xmax = cv->width - 1;
     ymax = cv->height - 1;
 
-    if(x2 < 0 || y2 < 0 || x > xmax || y > ymax)
+    if(x2 < 0 || y2 < 0 || x1 > xmax || y1 > ymax)
         return 0;
 
     /* Draw edges */
-    if(y >= 0)
-        for(i = x < 0 ? 1 : x + 1; i < x2 && i < xmax; i++)
-            caca_put_char(cv, i, y, chars[0]);
+    if(y1 >= 0)
+        for(i = x1 < 0 ? 1 : (int)x1 + 1; i < x2 && i < xmax; i++)
+            caca_put_char(cv, i, (int)y1, chars[0]);
 
     if(y2 <= ymax)
-        for(i = x < 0 ? 1 : x + 1; i < x2 && i < xmax; i++)
-            caca_put_char(cv, i, y2, chars[0]);
+        for(i = x1 < 0 ? 1 : (int)x1 + 1; i < x2 && i < xmax; i++)
+            caca_put_char(cv, i, (int)y2, chars[0]);
 
-    if(x >= 0)
-        for(j = y < 0 ? 1 : y + 1; j < y2 && j < ymax; j++)
-            caca_put_char(cv, x, j, chars[1]);
+    if(x1 >= 0)
+        for(j = y1 < 0 ? 1 : (int)y1 + 1; j < y2 && j < ymax; j++)
+            caca_put_char(cv, (int)x1, j, chars[1]);
 
     if(x2 <= xmax)
-        for(j = y < 0 ? 1 : y + 1; j < y2 && j < ymax; j++)
-            caca_put_char(cv, x2, j, chars[1]);
+        for(j = y1 < 0 ? 1 : (int)y1 + 1; j < y2 && j < ymax; j++)
+            caca_put_char(cv, (int)x2, j, chars[1]);
 
     /* Draw corners */
-    caca_put_char(cv, x, y, chars[2]);
-    caca_put_char(cv, x, y2, chars[3]);
-    caca_put_char(cv, x2, y, chars[4]);
-    caca_put_char(cv, x2, y2, chars[5]);
+    caca_put_char(cv, (int)x1, (int)y1, chars[2]);
+    caca_put_char(cv, (int)x1, (int)y2, chars[3]);
+    caca_put_char(cv, (int)x2, (int)y1, chars[4]);
+    caca_put_char(cv, (int)x2, (int)y2, chars[5]);
 
     return 0;
 }
-

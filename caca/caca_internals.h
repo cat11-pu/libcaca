@@ -269,6 +269,7 @@ extern void _caca_set_term_title(char const *);
 
 /* Internal memory function */
 extern void *_caca_alloc2d(size_t width, size_t height, size_t elem_size);
+extern int _caca_check_canvas_size(int width, int height);
 
 /* Profiling functions */
 #if defined PROF

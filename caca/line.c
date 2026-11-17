@@ -27,15 +27,15 @@
 #if !defined(_DOXYGEN_SKIP_ME)
 struct line
 {
-    int x1, y1;
-    int x2, y2;
+    int64_t x1, y1;
+    int64_t x2, y2;
     uint32_t ch;
     void (*draw) (caca_canvas_t *, struct line*);
 };
 #endif
 
 static void clip_line(caca_canvas_t*, struct line*);
-static uint8_t clip_bits(caca_canvas_t*, int, int);
+static uint8_t clip_bits(caca_canvas_t*, int64_t, int64_t);
 static void draw_solid_line(caca_canvas_t*, struct line*);
 static void draw_thin_line(caca_canvas_t*, struct line*);
 
@@ -181,7 +181,7 @@ static void clip_line(caca_canvas_t *cv, struct line* s)
             s->draw(cv, s);
         else
         {
-            int tmp;
+            int64_t tmp;
             tmp = s->x1; s->x1 = s->x2; s->x2 = tmp;
             tmp = s->y1; s->y1 = s->y2; s->y2 = tmp;
             clip_line(cv, s);
@@ -197,7 +197,7 @@ static void clip_line(caca_canvas_t *cv, struct line* s)
     }
     else if(bits1 & (1<<1))
     {
-        int xmax = cv->width - 1;
+        int64_t xmax = cv->width - 1;
         s->y1 = s->y2 - (s->x2 - xmax) * (s->y2 - s->y1) / (s->x2 - s->x1);
         s->x1 = xmax;
     }
@@ -208,7 +208,7 @@ static void clip_line(caca_canvas_t *cv, struct line* s)
     }
     else if(bits1 & (1<<3))
     {
-        int ymax = cv->height - 1;
+        int64_t ymax = cv->height - 1;
         s->x1 = s->x2 - (s->y2 - ymax) * (s->x2 - s->x1) / (s->y2 - s->y1);
         s->y1 = ymax;
     }
@@ -217,7 +217,7 @@ static void clip_line(caca_canvas_t *cv, struct line* s)
 }
 
 /* Helper function for clip_line(). */
-static uint8_t clip_bits(caca_canvas_t *cv, int x, int y)
+static uint8_t clip_bits(caca_canvas_t *cv, int64_t x, int64_t y)
 {
     uint8_t b = 0;
 
@@ -238,27 +238,27 @@ static uint8_t clip_bits(caca_canvas_t *cv, int x, int y)
  * scan-conversion algorithm. */
 static void draw_solid_line(caca_canvas_t *cv, struct line* s)
 {
-    int x1, y1, x2, y2;
-    int dx, dy;
-    int xinc, yinc;
+    int64_t x1, y1, x2, y2;
+    int64_t dx, dy;
+    int64_t xinc, yinc;
 
     x1 = s->x1; y1 = s->y1; x2 = s->x2; y2 = s->y2;
 
-    dx = abs(x2 - x1);
-    dy = abs(y2 - y1);
+    dx = llabs(x2 - x1);
+    dy = llabs(y2 - y1);
 
     xinc = (x1 > x2) ? -1 : 1;
     yinc = (y1 > y2) ? -1 : 1;
 
     if(dx >= dy)
     {
-        int dpr = dy << 1;
-        int dpru = dpr - (dx << 1);
-        int delta = dpr - dx;
+        int64_t dpr = dy << 1;
+        int64_t dpru = dpr - (dx << 1);
+        int64_t delta = dpr - dx;
 
         for(; dx>=0; dx--)
         {
-            caca_put_char(cv, x1, y1, s->ch);
+            caca_put_char(cv, (int)x1, (int)y1, s->ch);
             if(delta > 0)
             {
                 x1 += xinc;
@@ -274,13 +274,13 @@ static void draw_solid_line(caca_canvas_t *cv, struct line* s)
     }
     else
     {
-        int dpr = dx << 1;
-        int dpru = dpr - (dy << 1);
-        int delta = dpr - dy;
+        int64_t dpr = dx << 1;
+        int64_t dpru = dpr - (dy << 1);
+        int64_t delta = dpr - dy;
 
         for(; dy >= 0; dy--)
         {
-            caca_put_char(cv, x1, y1, s->ch);
+            caca_put_char(cv, (int)x1, (int)y1, s->ch);
             if(delta > 0)
             {
                 x1 += xinc;
@@ -301,9 +301,9 @@ static void draw_solid_line(caca_canvas_t *cv, struct line* s)
 static void draw_thin_line(caca_canvas_t *cv, struct line* s)
 {
     uint32_t charmapx[2], charmapy[2];
-    int x1, y1, x2, y2;
-    int dx, dy;
-    int yinc;
+    int64_t x1, y1, x2, y2;
+    int64_t dx, dy;
+    int64_t yinc;
 
     if(s->x2 >= s->x1)
     {
@@ -318,8 +318,8 @@ static void draw_thin_line(caca_canvas_t *cv, struct line* s)
         x2 = s->x1; y2 = s->y1; x1 = s->x2; y1 = s->y2;
     }
 
-    dx = abs(x2 - x1);
-    dy = abs(y2 - y1);
+    dx = llabs(x2 - x1);
+    dy = llabs(y2 - y1);
 
     if(y1 > y2)
     {
@@ -336,16 +336,16 @@ static void draw_thin_line(caca_canvas_t *cv, struct line* s)
 
     if(dx >= dy)
     {
-        int dpr = dy << 1;
-        int dpru = dpr - (dx << 1);
-        int delta = dpr - dx;
+        int64_t dpr = dy << 1;
+        int64_t dpru = dpr - (dx << 1);
+        int64_t delta = dpr - dx;
         int prev = 0;
 
         for(; dx>=0; dx--)
         {
             if(delta > 0)
             {
-                caca_put_char(cv, x1, y1, charmapy[1]);
+                caca_put_char(cv, (int)x1, (int)y1, charmapy[1]);
                 x1++;
                 y1 += yinc;
                 delta += dpru;
@@ -354,9 +354,9 @@ static void draw_thin_line(caca_canvas_t *cv, struct line* s)
             else
             {
                 if(prev)
-                    caca_put_char(cv, x1, y1, charmapy[0]);
+                    caca_put_char(cv, (int)x1, (int)y1, charmapy[0]);
                 else
-                    caca_put_char(cv, x1, y1, '-');
+                    caca_put_char(cv, (int)x1, (int)y1, '-');
                 x1++;
                 delta += dpr;
                 prev = 0;
@@ -365,27 +365,26 @@ static void draw_thin_line(caca_canvas_t *cv, struct line* s)
     }
     else
     {
-        int dpr = dx << 1;
-        int dpru = dpr - (dy << 1);
-        int delta = dpr - dy;
+        int64_t dpr = dx << 1;
+        int64_t dpru = dpr - (dy << 1);
+        int64_t delta = dpr - dy;
 
         for(; dy >= 0; dy--)
         {
             if(delta > 0)
             {
-                caca_put_char(cv, x1, y1, charmapx[0]);
-                caca_put_char(cv, x1 + 1, y1, charmapx[1]);
+                caca_put_char(cv, (int)x1, (int)y1, charmapx[0]);
+                caca_put_char(cv, (int)(x1 + 1), (int)y1, charmapx[1]);
                 x1++;
                 y1 += yinc;
                 delta += dpru;
             }
             else
             {
-                caca_put_char(cv, x1, y1, '|');
+                caca_put_char(cv, (int)x1, (int)y1, '|');
                 y1 += yinc;
                 delta += dpr;
             }
         }
     }
 }
-

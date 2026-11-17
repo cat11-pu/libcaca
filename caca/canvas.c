@@ -34,6 +34,32 @@
 
 static int caca_resize(caca_canvas_t *, int, int);
 
+int _caca_check_canvas_size(int width, int height)
+{
+    size_t cells;
+
+    if(width < 0 || height < 0)
+    {
+        seterrno(EINVAL);
+        return -1;
+    }
+
+    if(width && height > INT_MAX / width)
+    {
+        seterrno(EOVERFLOW);
+        return -1;
+    }
+
+    cells = (size_t)width * (size_t)height;
+    if(cells > SIZE_MAX / sizeof(uint32_t))
+    {
+        seterrno(EOVERFLOW);
+        return -1;
+    }
+
+    return 0;
+}
+
 /** \brief Initialise a \e libcaca canvas.
  *
  *  Initialise internal \e libcaca structures and the backend that will
@@ -57,11 +83,8 @@ caca_canvas_t * caca_create_canvas(int width, int height)
 {
     caca_canvas_t *cv;
 
-    if(width < 0 || height < 0)
-    {
-        seterrno(EINVAL);
+    if(_caca_check_canvas_size(width, height) < 0)
         return NULL;
-    }
 
     cv = malloc(sizeof(caca_canvas_t));
 
@@ -89,6 +112,12 @@ caca_canvas_t * caca_create_canvas(int width, int height)
     cv->frames[0].handlex = cv->frames[0].handley = 0;
     cv->frames[0].curattr = 0;
     cv->frames[0].name = strdup("frame#00000000");
+    if(!cv->frames[0].name)
+    {
+        free(cv->frames);
+        free(cv);
+        goto nomem;
+    }
 
     _caca_load_frame_info(cv);
     caca_set_color_ansi(cv, CACA_DEFAULT, CACA_TRANSPARENT);
@@ -100,6 +129,8 @@ caca_canvas_t * caca_create_canvas(int width, int height)
     if(caca_resize(cv, width, height) < 0)
     {
         int saved_errno = geterrno();
+        free(cv->frames[0].chars);
+        free(cv->frames[0].attrs);
         free(cv->frames[0].name);
         free(cv->frames);
         free(cv);
@@ -214,11 +245,8 @@ int caca_unmanage_canvas(caca_canvas_t *cv, int (*callback)(void *), void *p)
  */
 int caca_set_canvas_size(caca_canvas_t *cv, int width, int height)
 {
-    if(width < 0 || height < 0)
-    {
-        seterrno(EINVAL);
+    if(_caca_check_canvas_size(width, height) < 0)
         return -1;
-    }
 
     if(cv->refcount && cv->resize_callback
         && !cv->resize_callback(cv->resize_data))
@@ -367,18 +395,17 @@ int caca_rand(int min, int max)
 int caca_resize(caca_canvas_t *cv, int width, int height)
 {
     int x, y, f, old_width, old_height, old_size;
+    size_t new_bytes;
 
-    /* Check for overflow */
-    if (width != 0 && height > INT_MAX / width)
-    {
-        seterrno(EOVERFLOW);
+    if(_caca_check_canvas_size(width, height) < 0)
         return -1;
-    }
+
     int new_size = width * height;
 
     old_width = cv->width;
     old_height = cv->height;
     old_size = old_width * old_height;
+    new_bytes = (size_t)new_size * sizeof(uint32_t);
 
     _caca_save_frame_info(cv);
 
@@ -397,15 +424,29 @@ int caca_resize(caca_canvas_t *cv, int width, int height)
     {
         for(f = 0; f < cv->framecount; f++)
         {
-            cv->frames[f].chars = realloc(cv->frames[f].chars,
-                                          new_size * sizeof(uint32_t));
-            cv->frames[f].attrs = realloc(cv->frames[f].attrs,
-                                          new_size * sizeof(uint32_t));
-            if(new_size && (!cv->frames[f].chars || !cv->frames[f].attrs))
+            void *chars = realloc(cv->frames[f].chars, new_bytes);
+            void *attrs;
+
+            if(new_size && !chars)
             {
                 seterrno(ENOMEM);
+                cv->width = old_width;
+                cv->height = old_height;
+                _caca_load_frame_info(cv);
                 return -1;
             }
+            cv->frames[f].chars = chars;
+
+            attrs = realloc(cv->frames[f].attrs, new_bytes);
+            if(new_size && !attrs)
+            {
+                seterrno(ENOMEM);
+                cv->width = old_width;
+                cv->height = old_height;
+                _caca_load_frame_info(cv);
+                return -1;
+            }
+            cv->frames[f].attrs = attrs;
         }
     }
 
@@ -444,7 +485,7 @@ int caca_resize(caca_canvas_t *cv, int width, int height)
             }
         }
 
-        if(!cv->dirty_disabled)
+        if(!cv->dirty_disabled && old_height > 0)
             caca_add_dirty_rect(cv, old_width, 0,
                                 width - old_width, old_height);
     }
@@ -487,7 +528,7 @@ int caca_resize(caca_canvas_t *cv, int width, int height)
             }
         }
 
-        if(!cv->dirty_disabled)
+        if(!cv->dirty_disabled && old_width > 0)
             caca_add_dirty_rect(cv, 0, old_height,
                                 old_width, height - old_height);
     }
@@ -504,14 +545,24 @@ int caca_resize(caca_canvas_t *cv, int width, int height)
     {
         for(f = 0; f < cv->framecount; f++)
         {
-            cv->frames[f].chars = realloc(cv->frames[f].chars,
-                                          new_size * sizeof(uint32_t));
-            cv->frames[f].attrs = realloc(cv->frames[f].attrs,
-                                          new_size * sizeof(uint32_t));
-            if(new_size && (!cv->frames[f].chars || !cv->frames[f].attrs))
+            if(!new_size)
             {
-                seterrno(ENOMEM);
-                return -1;
+                free(cv->frames[f].chars);
+                free(cv->frames[f].attrs);
+                cv->frames[f].chars = NULL;
+                cv->frames[f].attrs = NULL;
+            }
+            else
+            {
+                void *chars = realloc(cv->frames[f].chars, new_bytes);
+                void *attrs;
+
+                if(chars)
+                    cv->frames[f].chars = chars;
+
+                attrs = realloc(cv->frames[f].attrs, new_bytes);
+                if(attrs)
+                    cv->frames[f].attrs = attrs;
             }
         }
     }
@@ -533,4 +584,3 @@ int caca_resize(caca_canvas_t *cv, int width, int height)
 
     return 0;
 }
-

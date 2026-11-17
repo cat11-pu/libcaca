@@ -34,6 +34,42 @@
 
 static void merge_new_rect(caca_canvas_t *cv, int n);
 
+static int clip_rect(caca_canvas_t *cv, int *x, int *y,
+                     int *width, int *height)
+{
+    int64_t xmin = *x, ymin = *y;
+    int64_t xmax = xmin + (int64_t)*width;
+    int64_t ymax = ymin + (int64_t)*height;
+
+    if(*width <= 0 || *height <= 0)
+    {
+        seterrno(EINVAL);
+        return -1;
+    }
+
+    if(xmin < 0)
+        xmin = 0;
+    if(ymin < 0)
+        ymin = 0;
+    if(xmax > cv->width)
+        xmax = cv->width;
+    if(ymax > cv->height)
+        ymax = cv->height;
+
+    if(xmin >= xmax || ymin >= ymax)
+    {
+        seterrno(EINVAL);
+        return -1;
+    }
+
+    *x = (int)xmin;
+    *y = (int)ymin;
+    *width = (int)(xmax - xmin);
+    *height = (int)(ymax - ymin);
+
+    return 0;
+}
+
 /** \brief Disable dirty rectangles.
  *
  *  Disable dirty rectangle handling for all \e libcaca graphic calls. This
@@ -165,23 +201,8 @@ int caca_add_dirty_rect(caca_canvas_t *cv, int x, int y, int width, int height)
 {
     debug("new dirty: %ix%i at (%i,%i)", width, height, x, y);
 
-    /* Clip arguments to canvas */
-    if(x < 0) { width += x; x = 0; }
-
-    if(x + width > cv->width)
-        width = cv->width - x;
-
-    if(y < 0) { height += y; y = 0; }
-
-    if(y + height > cv->height)
-        height = cv->height - y;
-
-    /* Ignore empty and out-of-canvas rectangles */
-    if(width <= 0 || height <= 0)
-    {
-        seterrno(EINVAL);
+    if(clip_rect(cv, &x, &y, &width, &height) < 0)
         return -1;
-    }
 
     /* Add the new rectangle to the list; it works even if cv->ndirty
      * is MAX_DIRTY_COUNT because there's an extra cell in the array. */
@@ -219,23 +240,8 @@ int caca_add_dirty_rect(caca_canvas_t *cv, int x, int y, int width, int height)
 int caca_remove_dirty_rect(caca_canvas_t *cv, int x, int y,
                            int width, int height)
 {
-    /* Clip arguments to canvas size */
-    if(x < 0) { width += x; x = 0; }
-
-    if(x + width > cv->width)
-        width = cv->width - x;
-
-    if(y < 0) { height += y; y = 0; }
-
-    if(y + height > cv->height)
-        height = cv->height - y;
-
-    /* Ignore empty and out-of-canvas rectangles */
-    if(width <= 0 || height <= 0)
-    {
-        seterrno(EINVAL);
+    if(clip_rect(cv, &x, &y, &width, &height) < 0)
         return -1;
-    }
 
     /* FIXME: implement this function. It's OK to have it do nothing,
      * since we take a conservative approach in dirty rectangle handling,
@@ -270,19 +276,21 @@ static inline int int_max(int a, int b) { return a > b ? a : b; }
 /* Merge a newly added rectangle, if necessary. */
 static void merge_new_rect(caca_canvas_t *cv, int n)
 {
-    int wasted[MAX_DIRTY_COUNT + 1];
-    int i, sn, best, best_score;
+    int64_t wasted[MAX_DIRTY_COUNT + 1];
+    int i, best;
+    int64_t sn, best_score;
 
     best = -1;
-    best_score = cv->width * cv->height;
+    best_score = (int64_t)cv->width * cv->height;
 
-    sn = (cv->dirty[n].xmax - cv->dirty[n].xmin + 1)
+    sn = (int64_t)(cv->dirty[n].xmax - cv->dirty[n].xmin + 1)
            * (cv->dirty[n].ymax - cv->dirty[n].ymin + 1);
 
     /* Check whether the new rectangle can be merged with an existing one. */
     for(i = 0; i < cv->ndirty; i++)
     {
-        int si, sf, xmin, ymin, xmax, ymax;
+        int64_t si, sf;
+        int xmin, ymin, xmax, ymax;
 
         if(i == n)
             continue;
@@ -292,7 +300,7 @@ static void merge_new_rect(caca_canvas_t *cv, int n)
         xmax = int_max(cv->dirty[i].xmax, cv->dirty[n].xmax);
         ymax = int_max(cv->dirty[i].ymax, cv->dirty[n].ymax);
 
-        sf = (xmax - xmin + 1) * (ymax - ymin + 1);
+        sf = (int64_t)(xmax - xmin + 1) * (ymax - ymin + 1);
 
         /* Shortcut: if the current rectangle is inside the new rectangle,
          * we remove the current rectangle and continue trying merges. */
@@ -310,7 +318,7 @@ static void merge_new_rect(caca_canvas_t *cv, int n)
             continue;
         }
 
-        si = (cv->dirty[i].xmax - cv->dirty[i].xmin + 1)
+        si = (int64_t)(cv->dirty[i].xmax - cv->dirty[i].xmin + 1)
                * (cv->dirty[i].ymax - cv->dirty[i].ymin + 1);
 
         /* Shortcut: if the new rectangle is inside the current rectangle,
@@ -378,4 +386,3 @@ void _caca_clip_dirty_rect_list(caca_canvas_t *cv)
             cv->dirty[i].ymax = cv->height - 1;
     }
 }
-

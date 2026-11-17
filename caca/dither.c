@@ -926,7 +926,9 @@ char const * caca_get_dither_algorithm(caca_dither_t const *d)
  *  Dither a bitmap at the given coordinates. The dither can be of any size
  *  and will be stretched to the text area.
  *
- *  This function never fails.
+ *  If an error occurs, -1 is returned and \b errno is set accordingly:
+ *  - \c EINVAL The destination width or height is not positive.
+ *  - \c ENOMEM Not enough memory for the scratch buffer.
  *
  *  \param cv A handle to the libcaca canvas.
  *  \param x X coordinate of the upper-left corner of the drawing area.
@@ -935,53 +937,85 @@ char const * caca_get_dither_algorithm(caca_dither_t const *d)
  *  \param h Height of the drawing area.
  *  \param d Dither object to be drawn.
  *  \param pixels Bitmap's pixels.
- *  \return This function always returns 0.
+ *  \return 0 in case of success, -1 if an error occurred.
  */
 int caca_dither_bitmap(caca_canvas_t *cv, int x, int y, int w, int h,
                         caca_dither_t const *d, void const *pixels)
 {
     int *floyd_steinberg, *fs_r, *fs_g, *fs_b;
     uint32_t savedattr;
-    int fs_length;
-    int x1, y1, x2, y2, pitch, deltax, deltay, dchmax;
+    int fs_length, fs_base;
+    int x1, y1, startx, starty, endx, endy;
+    int pitch, deltax, deltay, dchmax;
+    int64_t left, top, right, bottom;
 
     if(!d || !pixels)
-        return 0;
+    {
+        seterrno(EINVAL);
+        return -1;
+    }
+
+    if(w <= 0 || h <= 0)
+    {
+        seterrno(EINVAL);
+        return -1;
+    }
 
     savedattr = caca_get_attr(cv, -1, -1);
 
-    x1 = x; x2 = x + w - 1;
-    y1 = y; y2 = y + h - 1;
+    left = x;
+    top = y;
+    right = (int64_t)x + w;
+    bottom = (int64_t)y + h;
+
+    if(right <= 0 || bottom <= 0 || left >= cv->width || top >= cv->height)
+        return 0;
+
+    startx = left < 0 ? 0 : (int)left;
+    starty = top < 0 ? 0 : (int)top;
+    endx = right > cv->width ? cv->width : (int)right;
+    endy = bottom > cv->height ? cv->height : (int)bottom;
+
+    if(startx >= endx || starty >= endy)
+        return 0;
+
+    x1 = x;
+    y1 = y;
 
     /* FIXME: do not overwrite arguments */
     w = d->w;
     h = d->h;
     pitch = d->pitch;
 
-    deltax = x2 - x1 + 1;
-    deltay = y2 - y1 + 1;
+    deltax = (int)(right - left);
+    deltay = (int)(bottom - top);
     dchmax = d->glyph_count;
 
-    fs_length = ((int)cv->width <= x2 ? (int)cv->width : x2) + 1;
-    floyd_steinberg = malloc(3 * (fs_length + 2) * sizeof(int));
-    memset(floyd_steinberg, 0, 3 * (fs_length + 2) * sizeof(int));
+    fs_length = endx - startx + 2;
+    fs_base = startx;
+    floyd_steinberg = malloc(3 * (size_t)fs_length * sizeof(int));
+    if(!floyd_steinberg)
+    {
+        seterrno(ENOMEM);
+        return -1;
+    }
+    memset(floyd_steinberg, 0, 3 * (size_t)fs_length * sizeof(int));
     fs_r = floyd_steinberg + 1;
-    fs_g = fs_r + fs_length + 2;
-    fs_b = fs_g + fs_length + 2;
+    fs_g = floyd_steinberg + fs_length + 1;
+    fs_b = floyd_steinberg + 2 * fs_length + 1;
 
-    for(y = y1 > 0 ? y1 : 0; y <= y2 && y <= (int)cv->height; y++)
+    for(y = starty; y < endy; y++)
     {
         int remain_r = 0, remain_g = 0, remain_b = 0;
 
-        for(x = x1 > 0 ? x1 : 0, d->init_dither(y);
-            x <= x2 && x <= (int)cv->width;
-            x++)
+        for(x = startx, d->init_dither(y); x < endx; x++)
     {
         unsigned int rgba[4];
         int error[3];
         int i, ch = 0, distmin;
         int fg_r = 0, fg_g = 0, fg_b = 0, bg_r, bg_g, bg_b;
         int fromx, fromy, tox, toy, myx, myy, dots, dist;
+        int fx = x - fs_base;
 
         int outfg = 0, outbg = 0;
         uint32_t outch;
@@ -1041,9 +1075,9 @@ int caca_dither_bitmap(caca_canvas_t *cv, int x, int y, int w, int h,
         if(d->has_alpha && rgba[3] < 0x800)
         {
             remain_r = remain_g = remain_b = 0;
-            fs_r[x] = 0;
-            fs_g[x] = 0;
-            fs_b[x] = 0;
+            fs_r[fx] = 0;
+            fs_g[fx] = 0;
+            fs_b[fx] = 0;
             continue;
         }
 
@@ -1161,18 +1195,18 @@ int caca_dither_bitmap(caca_canvas_t *cv, int x, int y, int w, int h,
         /* XXX: OMG HAX */
         if(d->init_dither == init_fstein_dither)
         {
-            remain_r = fs_r[x+1] + 7 * error[0] / 16;
-            remain_g = fs_g[x+1] + 7 * error[1] / 16;
-            remain_b = fs_b[x+1] + 7 * error[2] / 16;
-            fs_r[x-1] += 3 * error[0] / 16;
-            fs_g[x-1] += 3 * error[1] / 16;
-            fs_b[x-1] += 3 * error[2] / 16;
-            fs_r[x] = 5 * error[0] / 16;
-            fs_g[x] = 5 * error[1] / 16;
-            fs_b[x] = 5 * error[2] / 16;
-            fs_r[x+1] = 1 * error[0] / 16;
-            fs_g[x+1] = 1 * error[1] / 16;
-            fs_b[x+1] = 1 * error[2] / 16;
+            remain_r = fs_r[fx+1] + 7 * error[0] / 16;
+            remain_g = fs_g[fx+1] + 7 * error[1] / 16;
+            remain_b = fs_b[fx+1] + 7 * error[2] / 16;
+            fs_r[fx-1] += 3 * error[0] / 16;
+            fs_g[fx-1] += 3 * error[1] / 16;
+            fs_b[fx-1] += 3 * error[2] / 16;
+            fs_r[fx] = 5 * error[0] / 16;
+            fs_g[fx] = 5 * error[1] / 16;
+            fs_b[fx] = 5 * error[2] / 16;
+            fs_r[fx+1] = 1 * error[0] / 16;
+            fs_g[fx+1] = 1 * error[1] / 16;
+            fs_b[fx+1] = 1 * error[2] / 16;
         }
 
         if(d->invert)
@@ -1574,4 +1608,3 @@ static int init_lookup(void)
 
     return 0;
 }
-

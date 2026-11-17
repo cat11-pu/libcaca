@@ -18,6 +18,7 @@
 
 #if !defined(__KERNEL__)
 #   include <stdlib.h>
+#   include <limits.h>
 #endif
 
 #include "caca.h"
@@ -30,6 +31,15 @@ static uint32_t leftchar(uint32_t ch);
 static uint32_t rightchar(uint32_t ch);
 static void leftpair(uint32_t pair[2]);
 static void rightpair(uint32_t pair[2]);
+
+static int clamp_int(int64_t value)
+{
+    if(value < INT_MIN)
+        return INT_MIN;
+    if(value > INT_MAX)
+        return INT_MAX;
+    return (int)value;
+}
 
 /** \brief Invert a canvas' colours.
  *
@@ -73,6 +83,9 @@ int caca_invert(caca_canvas_t *cv)
 int caca_flip(caca_canvas_t *cv)
 {
     int y;
+
+    if(cv->width <= 0 || cv->height <= 0)
+        return 0;
 
     for(y = 0; y < cv->height; y++)
     {
@@ -136,6 +149,9 @@ int caca_flop(caca_canvas_t *cv)
 {
     int x;
 
+    if(cv->width <= 0 || cv->height <= 0)
+        return 0;
+
     for(x = 0; x < cv->width; x++)
     {
         uint32_t *ctop = cv->chars + x;
@@ -183,14 +199,16 @@ int caca_flop(caca_canvas_t *cv)
  */
 int caca_rotate_180(caca_canvas_t *cv)
 {
-    uint32_t *cbegin = cv->chars;
-    uint32_t *cend = cbegin + cv->width * cv->height - 1;
-    uint32_t *abegin = cv->attrs;
-    uint32_t *aend = abegin + cv->width * cv->height - 1;
+    uint32_t *cbegin, *cend, *abegin, *aend;
     int y;
 
-    if(!cbegin)
-      return 0;
+    if(cv->width <= 0 || cv->height <= 0)
+        return 0;
+
+    cbegin = cv->chars;
+    cend = cbegin + cv->width * cv->height - 1;
+    abegin = cv->attrs;
+    aend = abegin + cv->width * cv->height - 1;
 
     while(cbegin < cend)
     {
@@ -246,6 +264,7 @@ int caca_rotate_180(caca_canvas_t *cv)
  *
  *  If an error occurs, -1 is returned and \b errno is set accordingly:
  *  - \c EBUSY The canvas is in use by a display driver and cannot be rotated.
+ *  - \c EOVERFLOW The rotated canvas size would overflow.
  *  - \c ENOMEM Not enough memory to allocate the new canvas size. If this
  *    happens, the previous canvas handle is still valid.
  *
@@ -256,6 +275,7 @@ int caca_rotate_left(caca_canvas_t *cv)
 {
     uint32_t *newchars, *newattrs;
     int x, y, w2, h2;
+    int64_t new_width, new_height;
 
     if(cv->refcount)
     {
@@ -263,10 +283,22 @@ int caca_rotate_left(caca_canvas_t *cv)
         return -1;
     }
 
+    if(cv->width <= 0 || cv->height <= 0)
+        return 0;
+
+    new_width = (int64_t)cv->height * 2;
+    new_height = ((int64_t)cv->width + 1) / 2;
+    if(new_width > INT_MAX
+        || new_width * new_height > INT_MAX)
+    {
+        seterrno(EOVERFLOW);
+        return -1;
+    }
+
     /* Save the current frame shortcuts */
     _caca_save_frame_info(cv);
 
-    w2 = (cv->width + 1) / 2;
+    w2 = (int)new_height;
     h2 = cv->height;
 
     newchars = _caca_alloc2d(w2, h2, 2 * sizeof(uint32_t));
@@ -328,16 +360,16 @@ int caca_rotate_left(caca_canvas_t *cv)
     /* Swap X and Y information */
     x = cv->frames[cv->frame].x;
     y = cv->frames[cv->frame].y;
-    cv->frames[cv->frame].x = y * 2;
-    cv->frames[cv->frame].y = (cv->width - 1 - x) / 2;
+    cv->frames[cv->frame].x = clamp_int((int64_t)y * 2);
+    cv->frames[cv->frame].y = clamp_int(((int64_t)cv->width - 1 - x) / 2);
 
     x = cv->frames[cv->frame].handlex;
     y = cv->frames[cv->frame].handley;
-    cv->frames[cv->frame].handlex = y * 2;
-    cv->frames[cv->frame].handley = (cv->width - 1 - x) / 2;
+    cv->frames[cv->frame].handlex = clamp_int((int64_t)y * 2);
+    cv->frames[cv->frame].handley = clamp_int(((int64_t)cv->width - 1 - x) / 2);
 
-    cv->frames[cv->frame].width = cv->height * 2;
-    cv->frames[cv->frame].height = (cv->width + 1) / 2;
+    cv->frames[cv->frame].width = (int)new_width;
+    cv->frames[cv->frame].height = (int)new_height;
 
     cv->frames[cv->frame].chars = newchars;
     cv->frames[cv->frame].attrs = newattrs;
@@ -366,6 +398,7 @@ int caca_rotate_left(caca_canvas_t *cv)
  *
  *  If an error occurs, -1 is returned and \b errno is set accordingly:
  *  - \c EBUSY The canvas is in use by a display driver and cannot be rotated.
+ *  - \c EOVERFLOW The rotated canvas size would overflow.
  *  - \c ENOMEM Not enough memory to allocate the new canvas size. If this
  *    happens, the previous canvas handle is still valid.
  *
@@ -376,6 +409,7 @@ int caca_rotate_right(caca_canvas_t *cv)
 {
     uint32_t *newchars, *newattrs;
     int x, y, w2, h2;
+    int64_t new_width, new_height;
 
     if(cv->refcount)
     {
@@ -383,20 +417,32 @@ int caca_rotate_right(caca_canvas_t *cv)
         return -1;
     }
 
+    if(cv->width <= 0 || cv->height <= 0)
+        return 0;
+
+    new_width = (int64_t)cv->height * 2;
+    new_height = ((int64_t)cv->width + 1) / 2;
+    if(new_width > INT_MAX
+        || new_width * new_height > INT_MAX)
+    {
+        seterrno(EOVERFLOW);
+        return -1;
+    }
+
     /* Save the current frame shortcuts */
     _caca_save_frame_info(cv);
 
-    w2 = (cv->width + 1) / 2;
+    w2 = (int)new_height;
     h2 = cv->height;
 
-    newchars = _caca_alloc2d(w2 * 2, h2, sizeof(uint32_t));
+    newchars = _caca_alloc2d(w2, h2, 2 * sizeof(uint32_t));
     if(!newchars)
     {
         seterrno(ENOMEM);
         return -1;
     }
 
-    newattrs = _caca_alloc2d(w2 * 2, h2, sizeof(uint32_t));
+    newattrs = _caca_alloc2d(w2, h2, 2 * sizeof(uint32_t));
     if(!newattrs)
     {
         free(newchars);
@@ -448,16 +494,16 @@ int caca_rotate_right(caca_canvas_t *cv)
     /* Swap X and Y information */
     x = cv->frames[cv->frame].x;
     y = cv->frames[cv->frame].y;
-    cv->frames[cv->frame].x = (cv->height - 1 - y) * 2;
-    cv->frames[cv->frame].y = x / 2;
+    cv->frames[cv->frame].x = clamp_int(((int64_t)cv->height - 1 - y) * 2);
+    cv->frames[cv->frame].y = clamp_int((int64_t)x / 2);
 
     x = cv->frames[cv->frame].handlex;
     y = cv->frames[cv->frame].handley;
-    cv->frames[cv->frame].handlex = (cv->height - 1 - y) * 2;
-    cv->frames[cv->frame].handley = x / 2;
+    cv->frames[cv->frame].handlex = clamp_int(((int64_t)cv->height - 1 - y) * 2);
+    cv->frames[cv->frame].handley = clamp_int((int64_t)x / 2);
 
-    cv->frames[cv->frame].width = cv->height * 2;
-    cv->frames[cv->frame].height = (cv->width + 1) / 2;
+    cv->frames[cv->frame].width = (int)new_width;
+    cv->frames[cv->frame].height = (int)new_height;
 
     cv->frames[cv->frame].chars = newchars;
     cv->frames[cv->frame].attrs = newattrs;
@@ -501,6 +547,9 @@ int caca_stretch_left(caca_canvas_t *cv)
         return -1;
     }
 
+    if(cv->width <= 0 || cv->height <= 0)
+        return 0;
+
     /* Save the current frame shortcuts */
     _caca_save_frame_info(cv);
 
@@ -543,12 +592,12 @@ int caca_stretch_left(caca_canvas_t *cv)
     x = cv->frames[cv->frame].x;
     y = cv->frames[cv->frame].y;
     cv->frames[cv->frame].x = y;
-    cv->frames[cv->frame].y = cv->width - 1 - x;
+    cv->frames[cv->frame].y = clamp_int((int64_t)cv->width - 1 - x);
 
     x = cv->frames[cv->frame].handlex;
     y = cv->frames[cv->frame].handley;
     cv->frames[cv->frame].handlex = y;
-    cv->frames[cv->frame].handley = cv->width - 1 - x;
+    cv->frames[cv->frame].handley = clamp_int((int64_t)cv->width - 1 - x);
 
     cv->frames[cv->frame].width = cv->height;
     cv->frames[cv->frame].height = cv->width;
@@ -594,6 +643,9 @@ int caca_stretch_right(caca_canvas_t *cv)
         return -1;
     }
 
+    if(cv->width <= 0 || cv->height <= 0)
+        return 0;
+
     /* Save the current frame shortcuts */
     _caca_save_frame_info(cv);
 
@@ -635,12 +687,12 @@ int caca_stretch_right(caca_canvas_t *cv)
     /* Swap X and Y information */
     x = cv->frames[cv->frame].x;
     y = cv->frames[cv->frame].y;
-    cv->frames[cv->frame].x = cv->height - 1 - y;
+    cv->frames[cv->frame].x = clamp_int((int64_t)cv->height - 1 - y);
     cv->frames[cv->frame].y = x;
 
     x = cv->frames[cv->frame].handlex;
     y = cv->frames[cv->frame].handley;
-    cv->frames[cv->frame].handlex = cv->height - 1 - y;
+    cv->frames[cv->frame].handlex = clamp_int((int64_t)cv->height - 1 - y);
     cv->frames[cv->frame].handley = x;
 
     cv->frames[cv->frame].width = cv->height;
@@ -1227,4 +1279,3 @@ static void rightpair(uint32_t pair[2])
             return;
         }
 }
-
