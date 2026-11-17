@@ -61,6 +61,8 @@ typedef struct caca_file caca_file_t;
 typedef struct caca_display caca_display_t;
 /** \e libcaca event structure */
 typedef struct caca_event caca_event_t;
+/** differential terminal renderer */
+typedef struct caca_diff caca_diff_t;
 
 /** \defgroup caca_attr libcaca attribute definitions
  *
@@ -279,6 +281,39 @@ __extern int caca_get_dirty_rect(caca_canvas_t *, int, int *, int *,
 __extern int caca_add_dirty_rect(caca_canvas_t *, int, int, int, int);
 __extern int caca_remove_dirty_rect(caca_canvas_t *, int, int, int, int);
 __extern int caca_clear_dirty_rect_list(caca_canvas_t *);
+/*  @} */
+
+/** \defgroup caca_diff libcaca differential terminal rendering
+ *
+ *  These functions keep a shadow copy of a canvas and produce the smallest
+ *  ANSI escape sequence stream needed to update a terminal. Only cells in
+ *  the requested rectangle are examined, and at most one cursor movement is
+ *  emitted per contiguous run of changed cells.
+ *
+ *  The first refresh, the first refresh after caca_diff_reset(), and the
+ *  first refresh after the canvas size changes always repaint the complete
+ *  canvas. Subsequent refreshes are incremental. The caller is responsible
+ *  for passing a rectangle that covers all changes since the previous
+ *  refresh; the existing dirty rectangle API can be used to obtain it.
+ *  Rectangles are clipped to the canvas. An empty or fully clipped rectangle
+ *  changes no cells, though the cursor is still synchronised.
+ *
+ *  On success the output string is NUL-terminated, but \e bytes does not
+ *  include the terminator. It must be released with free(). After a
+ *  successful refresh the terminal cursor is at the canvas cursor position,
+ *  clamped to the canvas boundaries, and all graphic rendition attributes
+ *  are reset.
+ *
+ *  If an error occurs, -1 is returned and \b errno is set accordingly:
+ *  - \c EINVAL A required argument is NULL or a rectangle size is negative.
+ *  - \c ENOMEM Not enough memory for the shadow canvas or output buffer.
+ *
+ *  @{ */
+__extern caca_diff_t * caca_create_diff(void);
+__extern int caca_diff_reset(caca_diff_t *);
+__extern int caca_diff_refresh(caca_diff_t *, caca_canvas_t const *,
+                               int, int, int, int, char **, size_t *);
+__extern int caca_diff_free(caca_diff_t *);
 /*  @} */
 
 /** \defgroup caca_transform libcaca canvas transformation

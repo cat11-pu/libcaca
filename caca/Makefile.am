@@ -31,6 +31,7 @@ libcaca_la_SOURCES = \
 	caca0.h \
 	canvas.c \
 	dirty.c \
+	diff.c \
 	string.c \
 	transform.c \
 	charset.c \
@@ -104,4 +105,3 @@ driver_source += driver/cocoa.m
 else
 EXTRA_CHECKS = driver/cocoa.m
 endif
-

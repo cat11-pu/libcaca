@@ -29,6 +29,7 @@ caca-config
 caca/t/bench
 caca/t/bug-setlocale
 caca/t/caca-test
+caca/t/diffcheck
 caca/t/simple
 caca/t/*.log
 caca/t/*.trs
@@ -102,4 +103,3 @@ src/img2txt
 tools/optipal
 tools/makefont
 tools/sortchars
-
